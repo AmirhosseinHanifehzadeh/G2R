@@ -19,7 +19,6 @@ export function activate(context: vscode.ExtensionContext) {
 		const lineText = document.lineAt(lineNumber).text;
 		if (lineText.includes('Scenario:')) {
 			const processed = lineText.replace(/ /g, '_').toLowerCase();
-			vscode.window.showInformationMessage(processed);
 		} else {
 			vscode.window.showInformationMessage('This is not a Scenario line.');
 			return;
@@ -77,17 +76,15 @@ export function activate(context: vscode.ExtensionContext) {
 			const testFuncRegex = /func\s+(Test\w+)\s*\(.*?\)\s*\{/;
 			match = testFuncRegex.exec(goFileContent);
 			if (match) {
-				vscode.window.showInformationMessage(`Found .go file: ${foundGoFilePath} containing ${featureFilePath}. First test function: ${match[0]}`);
 				functionName = match[1];
 			} else {
 				vscode.window.showInformationMessage(`Found .go file: ${foundGoFilePath} containing ${featureFilePath}, but no test functions found.`);
+				return;
 			}
 		} else {
 			vscode.window.showInformationMessage('No .go file containing the feature file path was found up to general-market directory.');
 			return;
 		}
-
-		vscode.window.showInformationMessage(`searchPath: ${searchPath}`);
 
 		// Pop pathParts until we arrive at 'service' directory
 		let servicePathParts = [...pathParts];
