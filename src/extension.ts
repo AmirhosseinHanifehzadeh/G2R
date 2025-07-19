@@ -77,7 +77,6 @@ export function activate(context: vscode.ExtensionContext) {
 			const testFuncRegex = /func\s+(Test\w+)\s*\(.*?\)\s*\{/;
 			match = testFuncRegex.exec(goFileContent);
 			if (match) {
-				vscode.window.showInformationMessage(`Found .go file: ${foundGoFilePath} containing ${featureFilePath}. First test function: ${match[0]}`);
 				functionName = match[1];
 			} else {
 				vscode.window.showInformationMessage(`Found .go file: ${foundGoFilePath} containing ${featureFilePath}, but no test functions found.`);
@@ -86,8 +85,6 @@ export function activate(context: vscode.ExtensionContext) {
 			vscode.window.showInformationMessage('No .go file containing the feature file path was found up to general-market directory.');
 			return;
 		}
-
-		vscode.window.showInformationMessage(`searchPath: ${searchPath}`);
 
 		// Pop pathParts until we arrive at 'service' directory
 		let servicePathParts = [...pathParts];
