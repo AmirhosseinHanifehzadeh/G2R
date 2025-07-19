@@ -2,7 +2,7 @@
   "name": "gogherkinrunner",
   "displayName": "Go Gherkin Runner",
   "description": "Run single Gherkin scenarios in Go projects directly from VS Code without commenting!",
-  "version": "0.0.2",
+  "version": "0.0.3",
   "publisher": "AmirHosseinHanifehzadeh",
   "repository": {
     "type": "git",
@@ -18,7 +18,7 @@
     "scenario"
   ],
   "engines": {
-    "vscode": "^1.99.0"
+    "vscode": "^1.60.0"
   },
   "categories": [
     "Testing",
@@ -60,7 +60,7 @@
     "test": "vscode-test"
   },
   "devDependencies": {
-    "@types/vscode": "^1.99.0",
+    "@types/vscode": "^1.60.0",
     "@types/mocha": "^10.0.10",
     "@types/node": "20.x",
     "@typescript-eslint/eslint-plugin": "^8.31.1",
