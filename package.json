@@ -1,8 +1,8 @@
 {
   "name": "gogherkinrunner",
-  "displayName": "GoGherkinRunner",
+  "displayName": "Go Gherkin Runner",
   "description": "Run single Gherkin scenarios in Go projects directly from VS Code without commenting!",
-  "version": "0.0.1",
+  "version": "0.0.2",
   "publisher": "AmirHosseinHanifehzadeh",
   "repository": {
     "type": "git",
