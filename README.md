@@ -1,7 +1,5 @@
 # GoGherkinRunner VS Code Extension
 
-![GoGherkinRunner Logo](logo.png)
-
 GoGherkinRunner helps you run and debug individual Gherkin scenarios in Go projects directly from VS Code. It is designed for teams working with `.feature` files and Go test integration, making it easy to execute or debug a single scenario with one click.
 
 ## Features
