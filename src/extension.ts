@@ -3,45 +3,85 @@ import * as vscode from 'vscode';
 
 export function activate(context: vscode.ExtensionContext) {
 	// Register the new command for showing the current Gherkin line
-	const showGherkinLineDisposable = vscode.commands.registerCommand('GoGherkinRunner.runSingleScenario', (lineNumberFromLens?: number) => {
-		const editor = vscode.window.activeTextEditor;
-		if (!editor) {
-			vscode.window.showInformationMessage('No active editor found.');
-			return;
-		}
-		const document = editor.document;
+	const validateDocument = (document: vscode.TextDocument) => {
 		if (document.languageId !== 'feature' && !document.fileName.endsWith('.feature')) {
-			vscode.window.showInformationMessage('This is not a .feature (Gherkin) file.');
-			return;
+			return false;
+		}
+		return true;
+	};
+
+	const validateScenario = (lineText: string) => {
+		if (!lineText.includes('Scenario:') || lineText.trim().startsWith('#')) {
+			return false;
+		}
+		return true;
+	};
+
+	const parseScenario = (lineText: string) => {
+		let result = lineText.trim();
+		if (result.startsWith('Scenario:')) {
+			result = result.slice('Scenario:'.length).trim();
+			return result.replace(/ /g, '_');
 		}
 
-		const lineNumber = typeof lineNumberFromLens === 'number' ? lineNumberFromLens : editor.selection.active.line;
-		const lineText = document.lineAt(lineNumber).text;
-		if (lineText.includes('Scenario:')) {
-			const processed = lineText.replace(/ /g, '_').toLowerCase();
-		} else {
-			vscode.window.showInformationMessage('This is not a Scenario line.');
-			return;
+		if (result.startsWith('Scenario Outline:')) {
+			result = result.slice('Scenario Outline:'.length).trim();
+			return result.replace(/ /g, '_');
 		}
-		// Remove leading/trailing spaces and 'Scenario:' from the line
-		let parsedScenario = lineText.trim();
-		if (parsedScenario.startsWith('Scenario:')) {
-			parsedScenario = parsedScenario.slice('Scenario:'.length).trim();
-		}
-		parsedScenario = parsedScenario.replace(/ /g, '_');
 
-		// Find Test Function Name
+		return null;
+	};
+
+	const findTestFunctionName = (testFilePath: string): string | null => {
+		const fs = require('fs');
+		const goFileContent = fs.readFileSync(testFilePath, 'utf8');
+		const testFuncRegex = /func\s+(Test\w+)\s*\(.*?\)\s*\{/;
+
+		const match = testFuncRegex.exec(goFileContent);
+		if (match) {
+			return match[1];
+		}
+
+		return null;
+	};
+
+	const findEnvPath = (fullPath: string): string | null => {
+		const pathParts = fullPath.split(/[/\\]/);
+		let servicePathParts = [...pathParts];
+		let lastDir = '';
+		while (servicePathParts.length > 0) {
+			lastDir = servicePathParts[servicePathParts.length - 1];
+			if (lastDir === 'service') {
+				return servicePathParts.join('/');
+			}
+			servicePathParts.pop();
+		}
+		return null;
+	};
+
+	const findPackagePath = (searchPath: string): string | null => {
+		const searchPathList = searchPath.split(/[/\\]/);
+		const lastDir = searchPathList.pop();
+		const generalMarketIndex = searchPathList.indexOf('general-market');
+		if (generalMarketIndex !== -1) {
+			searchPathList.splice(0, generalMarketIndex + 1);
+			return "hs.ir/" + searchPathList.join('/');
+		}
+		return null;
+	};
+
+	const findGoTestFile = (document: vscode.TextDocument): { foundGoFile: string | null, foundGoFilePath: string | null } => {
+		const fs = require('fs');
+		const path = require('path');
+
 		const fullPath = document.fileName;
 		const pathParts = fullPath.split(/[/\\]/);
 		let featureFilePath = pathParts.pop();
 		let searchPath = pathParts.join('/');
 
-		const fs = require('fs');
-		const path = require('path');
 		let foundGoFile = null;
 		let foundGoFilePath = null;
 		while (true) {
-			// Check for .go files in currentDir
 			const files = fs.readdirSync(searchPath);
 			for (const file of files) {
 				if (file.endsWith('.go')) {
@@ -54,161 +94,133 @@ export function activate(context: vscode.ExtensionContext) {
 					}
 				}
 			}
-
 			if (foundGoFile) {
 				break;
 			}
-
 			const lastDir = pathParts.pop();
 			searchPath = pathParts.join('/');
 			featureFilePath = lastDir + '/' + featureFilePath;
+		}
+		return { foundGoFile, foundGoFilePath };
+	};
 
-			if (lastDir === 'general-market') {
-				break;
-			}
+	const RunSingleScenario = vscode.commands.registerCommand('GoGherkinRunner.runSingleScenario', (lineNumberFromLens?: number) => {
+		const editor = vscode.window.activeTextEditor;
+		if (!editor) {
+			vscode.window.showInformationMessage('No active editor found.');
+			return;
+		}
+		const document = editor.document;
+		if (!validateDocument(document)) {
+			vscode.window.showInformationMessage('This is not a .feature (Gherkin) file.');
+			return;
 		}
 
-		let match: RegExpExecArray | null;
-		let functionName: string = "";
-		if (foundGoFile) {
-			// Find all test function names in the found .go file
-			const goFileContent = fs.readFileSync(foundGoFilePath, 'utf8');
-			const testFuncRegex = /func\s+(Test\w+)\s*\(.*?\)\s*\{/;
-			match = testFuncRegex.exec(goFileContent);
-			if (match) {
-				functionName = match[1];
-			} else {
-				vscode.window.showInformationMessage(`Found .go file: ${foundGoFilePath} containing ${featureFilePath}, but no test functions found.`);
-				return;
-			}
-		} else {
+		const lineNumber = typeof lineNumberFromLens === 'number' ? lineNumberFromLens : editor.selection.active.line;
+		const lineText = document.lineAt(lineNumber).text;
+		if (!validateScenario(lineText)) {
+			vscode.window.showInformationMessage('This is not a Scenario line.');
+			return;
+		}
+
+		const parsedScenario = parseScenario(lineText);
+		if (!parsedScenario) {
+			vscode.window.showInformationMessage('This is not a Scenario line.');
+			return;
+		}
+
+		// Find Test File
+		const { foundGoFile, foundGoFilePath } = findGoTestFile(document);
+		if (!foundGoFile || !foundGoFilePath) {
 			vscode.window.showInformationMessage('No .go file containing the feature file path was found up to general-market directory.');
 			return;
 		}
 
-		// Pop pathParts until we arrive at 'service' directory
-		let servicePathParts = [...pathParts];
-		let lastDir = '';
-		while (servicePathParts.length > 0) {
-			lastDir = servicePathParts[servicePathParts.length - 1];
-			if (lastDir === 'service') {
-				break;
-			}
-			servicePathParts.pop();
-		}
-		const projectPath = servicePathParts.join('/');
-
-		// Remove everything before and including "general-market" and set searchPath to "hs.ir"
-		const generalMarketIndex = pathParts.indexOf('general-market');
-		if (generalMarketIndex !== -1) {
-			pathParts.splice(0, generalMarketIndex + 1);
-			searchPath = "hs.ir" + "/" + pathParts.join('/');
+		// Find Test Function Name
+		let functionName = findTestFunctionName(foundGoFilePath);
+		if (!functionName) {
+			vscode.window.showInformationMessage(`Found .go file: ${foundGoFilePath}, but no test function found.`);
+			return;
 		}
 
-		const command = `/usr/local/go/bin/go test -timeout 30s -run ^${functionName}/${parsedScenario}$ ${searchPath} -benchmem -benchtime 1s -args -dotenv-dir ${projectPath}`;
+		// find .env file
+		const dotEnvPath = findEnvPath(foundGoFilePath);
+		if (!dotEnvPath) {
+			vscode.window.showInformationMessage('No .env file found.');
+			return;
+		}
 
-		// Send the original lineText to the integrated terminal and press Enter
+		const packagePath = findPackagePath(foundGoFilePath);
+		if (!packagePath) {
+			vscode.window.showInformationMessage('No project path found.');
+			return;
+		}
+
+		const command = `go test -timeout 30s -run ^${functionName}/${parsedScenario}$ ${packagePath} -benchmem -benchtime 1s -args -dotenv-dir ${dotEnvPath}`;
+
+		// run command in terminal
 		let terminal = vscode.window.activeTerminal;
 		if (!terminal) {
 			terminal = vscode.window.createTerminal('GoGherkinRunner Terminal');
 		}
 		terminal.show();
-		terminal.sendText(command, true); // true means send Enter after the text
+		terminal.sendText(command, true);
 	});
 
-	context.subscriptions.push(showGherkinLineDisposable);
+	context.subscriptions.push(RunSingleScenario);
 
 	// Register the new command for debugging the current Gherkin scenario
-	const debugGherkinLineDisposable = vscode.commands.registerCommand('GoGherkinRunner.debugSingleScenario', async (lineNumberFromLens?: number) => {
+	const DebugSingleScenario = vscode.commands.registerCommand('GoGherkinRunner.debugSingleScenario', async (lineNumberFromLens?: number) => {
 		const editor = vscode.window.activeTextEditor;
 		if (!editor) {
 			vscode.window.showInformationMessage('No active editor found.');
 			return;
 		}
 		const document = editor.document;
-		if (document.languageId !== 'feature' && !document.fileName.endsWith('.feature')) {
+		if (!validateDocument(document)) {
 			vscode.window.showInformationMessage('This is not a .feature (Gherkin) file.');
 			return;
 		}
 
 		const lineNumber = typeof lineNumberFromLens === 'number' ? lineNumberFromLens : editor.selection.active.line;
 		const lineText = document.lineAt(lineNumber).text;
-		if (!lineText.includes('Scenario:')) {
+		if (!validateScenario(lineText)) {
 			vscode.window.showInformationMessage('This is not a Scenario line.');
 			return;
 		}
 
-		// Remove leading/trailing spaces and 'Scenario:' from the line
-		let parsedScenario = lineText.trim();
-		if (parsedScenario.startsWith('Scenario:')) {
-			parsedScenario = parsedScenario.slice('Scenario:'.length).trim();
-		}
-		parsedScenario = parsedScenario.replace(/ /g, '_');
-
-		// Find Test Function Name (reuse logic from showGherkinLine)
-		const fullPath = document.fileName;
-		const pathParts = fullPath.split(/[/\\]/);
-		let featureFilePath = pathParts.pop();
-		let searchPath = pathParts.join('/');
-
-		const fs = require('fs');
-		const path = require('path');
-		let foundGoFile = null;
-		let foundGoFilePath = null;
-		while (true) {
-			const files = fs.readdirSync(searchPath);
-			for (const file of files) {
-				if (file.endsWith('.go')) {
-					const goFilePath = path.join(searchPath, file);
-					const content = fs.readFileSync(goFilePath, 'utf8');
-					if (content.includes(featureFilePath)) {
-						foundGoFile = file;
-						foundGoFilePath = goFilePath;
-						break;
-					}
-				}
-			}
-			if (foundGoFile) {
-				break;
-			}
-			const lastDir = pathParts.pop();
-			searchPath = pathParts.join('/');
-			featureFilePath = lastDir + '/' + featureFilePath;
-			if (lastDir === 'general-market') {
-				break;
-			}
-		}
-
-		let match = null;
-		let functionName = '';
-		if (foundGoFile) {
-			const goFileContent = fs.readFileSync(foundGoFilePath, 'utf8');
-			const testFuncRegex = /func\s+(Test\w+)\s*\(.*?\)\s*\{/;
-			match = testFuncRegex.exec(goFileContent);
-			if (match) {
-				functionName = match[1];
-			}
-		}
-		if (!functionName) {
-			vscode.window.showInformationMessage('Could not find test function for this scenario.');
+		const parsedScenario = parseScenario(lineText);
+		if (!parsedScenario) {
+			vscode.window.showInformationMessage('This is not a Scenario line.');
 			return;
 		}
 
-		// Set the Go package directory (adjust as needed)
-		const programPath = searchPath.startsWith('/') ? searchPath : '/' + searchPath;
-		const cwdPath = programPath;
-
-		// Pop pathParts until we arrive at 'service' directory
-		let servicePathParts = [...pathParts];
-		let lastDir = '';
-		while (servicePathParts.length > 0) {
-			lastDir = servicePathParts[servicePathParts.length - 1];
-			if (lastDir === 'service') {
-				break;
-			}
-			servicePathParts.pop();
+		// Find Test File
+		const { foundGoFile, foundGoFilePath } = findGoTestFile(document);
+		if (!foundGoFile || !foundGoFilePath) {
+			vscode.window.showInformationMessage('No .go file containing the feature file path was found up to general-market directory.');
+			return;
 		}
-		const projectPath = '/' + servicePathParts.join('/');
+
+		// Find Test Function Name
+		let functionName = findTestFunctionName(foundGoFilePath);
+		if (!functionName) {
+			vscode.window.showInformationMessage(`Found .go file: ${foundGoFilePath}, but no test function found.`);
+			return;
+		}
+
+		// find .env file
+		const dotEnvPath = findEnvPath(foundGoFilePath);
+		if (!dotEnvPath) {
+			vscode.window.showInformationMessage('No .env file found.');
+			return;
+		}
+
+		const packagePath = findPackagePath(foundGoFilePath);
+		if (!packagePath) {
+			vscode.window.showInformationMessage('No project path found.');
+			return;
+		}
 
 		await vscode.debug.startDebugging(
 			undefined,
@@ -217,18 +229,18 @@ export function activate(context: vscode.ExtensionContext) {
 				type: 'go',
 				request: 'launch',
 				mode: 'test',
-				program: programPath,
+				program: packagePath,
 				args: [
 					'-test.run',
 					`^${functionName}/${parsedScenario}$`,
 					'-dotenv-dir',
-					projectPath,
+					dotEnvPath,
 				],
-				cwd: cwdPath
+				cwd: dotEnvPath
 			}
 		);
 	});
-	context.subscriptions.push(debugGherkinLineDisposable);
+	context.subscriptions.push(DebugSingleScenario);
 
 	// Create a test controller for GoGherkinRunner
 	const testController = vscode.tests.createTestController('GoGherkinRunnerTestController', 'GoGherkinRunner Tests');
