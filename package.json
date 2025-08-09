@@ -45,6 +45,14 @@
       {
         "command": "GoGherkinRunner.debugSingleScenario",
         "title": "Debug Single Scenario"
+      },
+      {
+        "command": "GoGherkinRunner.runScenarioInExplorer",
+        "title": "Run Scenario (Test Explorer)"
+      },
+      {
+        "command": "GoGherkinRunner.discoverAllFeatures",
+        "title": "Discover All Gherkin Scenarios"
       }
     ]
   },
