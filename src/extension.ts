@@ -70,6 +70,12 @@ export function activate(context: vscode.ExtensionContext) {
 		return null;
 	};
 
+	const findPackagePathInLocal = (searchPath: string): string | null => {
+		const pathParts = searchPath.split(/[/\\]/);
+		const lastDir = pathParts.pop();
+		return pathParts.join('/');
+	};
+
 	const findGoTestFile = (document: vscode.TextDocument): { foundGoFile: string | null, foundGoFilePath: string | null } => {
 		const fs = require('fs');
 		const path = require('path');
@@ -216,7 +222,7 @@ export function activate(context: vscode.ExtensionContext) {
 			return;
 		}
 
-		const packagePath = findPackagePath(foundGoFilePath);
+		const packagePath = findPackagePathInLocal(foundGoFilePath);
 		if (!packagePath) {
 			vscode.window.showInformationMessage('No project path found.');
 			return;
