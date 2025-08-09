@@ -236,7 +236,7 @@ export function activate(context: vscode.ExtensionContext) {
 					'-dotenv-dir',
 					dotEnvPath,
 				],
-				cwd: dotEnvPath
+				cwd: packagePath,
 			}
 		);
 	});
