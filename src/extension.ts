@@ -29,6 +29,8 @@ export function activate(context: vscode.ExtensionContext) {
 
 		// Replace spaces with underscores and remove/replace problematic characters
 		result = result.replace(/ /g, '_');
+		// Add backslash before every ( or ) or '
+		result = result.replace(/[\(\)']/g, match => '\\' + match);
 
 		return result;
 	};
@@ -92,7 +94,7 @@ export function activate(context: vscode.ExtensionContext) {
 			const files = fs.readdirSync(searchPath);
 			for (const file of files) {
 				if (file.endsWith('.go')) {
-					const goFilePath = path.join(searchPath, file);
+					const goFilePath = require('path').join(searchPath, file);
 					const content = fs.readFileSync(goFilePath, 'utf8');
 					if (content.includes(featureFilePath)) {
 						foundGoFile = file;
@@ -249,10 +251,255 @@ export function activate(context: vscode.ExtensionContext) {
 	});
 	context.subscriptions.push(DebugSingleScenario);
 
-	// Create a test controller for GoGherkinRunner
-	// const testController = vscode.tests.createTestController('GoGherkinRunnerTestController', 'GoGherkinRunner Tests');
-	// context.subscriptions.push(testController);
+	// Create a Test Controller for GoGherkinRunner
+	const testController = vscode.tests.createTestController('GoGherkinRunnerTestController', 'Go Gherkin Scenarios');
+	context.subscriptions.push(testController);
 
+	// Focus Testing view with best-effort command discovery (different VS Code versions/editions)
+	const focusTestingViewIfAvailable = async () => {
+		try {
+			const commands = await vscode.commands.getCommands(true);
+			const candidates = [
+				'workbench.view.testing',
+				'workbench.view.extension.test',
+				'testing.open',
+				'workbench.view.extension.testing',
+				'workbench.views.testing.focus'
+			];
+			for (const id of candidates) {
+				if (commands.includes(id)) {
+					await vscode.commands.executeCommand(id);
+					return;
+				}
+			}
+		} catch {
+			// ignore if focusing fails
+		}
+	};
+
+	// Maintain and discover tests in .feature files
+	const getOrCreateFileItem = (uri: vscode.Uri): vscode.TestItem => {
+		const id = uri.toString();
+		let fileItem = testController.items.get(id);
+		if (!fileItem) {
+			fileItem = testController.createTestItem(id, uri.path.split('/').pop() || uri.path, uri);
+			testController.items.add(fileItem);
+		}
+		return fileItem;
+	};
+
+	const discoverScenariosInDocument = async (document: vscode.TextDocument) => {
+		if (!validateDocument(document)) {
+			return;
+		}
+		const fileItem = getOrCreateFileItem(document.uri);
+		fileItem.children.replace([]);
+		for (let i = 0; i < document.lineCount; i++) {
+			const line = document.lineAt(i);
+			if (line.text.trim().startsWith('#')) {
+				continue;
+			}
+			if (line.text.includes('Scenario:') || line.text.includes('Scenario Outline:')) {
+				const id = `${document.uri.toString()}#${i}`;
+				const scenarioItem = testController.createTestItem(id, line.text.trim(), document.uri);
+				scenarioItem.range = new vscode.Range(i, 0, i, line.text.length);
+				fileItem.children.add(scenarioItem);
+			}
+		}
+	};
+
+	testController.resolveHandler = async (item?: vscode.TestItem) => {
+		if (!item) {
+			// Lazy: only discover scenarios for currently visible .feature editors
+			const visibleDocs = vscode.window.visibleTextEditors
+				.map(e => e.document)
+				.filter(doc => validateDocument(doc));
+			await Promise.all(visibleDocs.map(doc => discoverScenariosInDocument(doc)));
+			return;
+		}
+		// If a file node is expanded, refresh its scenarios
+		if (item.uri) {
+			const doc = await vscode.workspace.openTextDocument(item.uri);
+			await discoverScenariosInDocument(doc);
+		}
+	};
+
+	const enqueueAll = (collection: vscode.TestItemCollection, queue: vscode.TestItem[]) => {
+		collection.forEach((child) => {
+			if (child.children.size === 0) {
+				queue.push(child);
+			} else {
+				enqueueAll(child.children, queue);
+			}
+		});
+	};
+
+	const runHandler = async (request: vscode.TestRunRequest, token: vscode.CancellationToken, debug: boolean) => {
+		const run = testController.createTestRun(request);
+		await focusTestingViewIfAvailable();
+		const queue: vscode.TestItem[] = [];
+		if (request.include) {
+			request.include.forEach(test => queue.push(test));
+		} else {
+			enqueueAll(testController.items, queue);
+		}
+
+		for (const test of queue) {
+			if (token.isCancellationRequested) {
+				break;
+			}
+			// Only handle scenario items (leaf nodes with a range)
+			if (!test.uri || !test.range) {
+				continue;
+			}
+			if (debug) {
+				// For debug profile, keep using existing debug command behavior
+				try {
+					await vscode.window.showTextDocument(test.uri, { preview: false, preserveFocus: true });
+					await vscode.commands.executeCommand('GoGherkinRunner.debugSingleScenario', test.range.start.line);
+					run.enqueued(test);
+					run.started(test);
+					run.passed(test);
+				} catch (err: any) {
+					run.errored(test, new vscode.TestMessage((err && err.message) || String(err)));
+				}
+				continue;
+			}
+
+			// RUN: execute go test via child_process and capture output
+			try {
+				const doc = await vscode.workspace.openTextDocument(test.uri);
+				const lineNumber = test.range.start.line;
+				const lineText = doc.lineAt(lineNumber).text;
+				if (!validateScenario(lineText)) {
+					run.skipped(test);
+					continue;
+				}
+				const parsedScenario = parseScenario(lineText);
+				const { foundGoFilePath } = findGoTestFile(doc);
+				if (!foundGoFilePath) {
+					run.errored(test, new vscode.TestMessage('No .go file containing the feature file path was found.'));
+					continue;
+				}
+				const functionName = findTestFunctionName(foundGoFilePath);
+				if (!functionName) {
+					run.errored(test, new vscode.TestMessage(`Found .go file: ${foundGoFilePath}, but no test function found.`));
+					continue;
+				}
+				const dotEnvPath = findEnvPath(foundGoFilePath);
+				if (!dotEnvPath) {
+					run.errored(test, new vscode.TestMessage('No .env file found.'));
+					continue;
+				}
+				const packagePath = findPackagePath(foundGoFilePath);
+				if (!packagePath) {
+					run.errored(test, new vscode.TestMessage('No project path found.'));
+					continue;
+				}
+
+				run.enqueued(test);
+				run.started(test);
+
+				const { spawn } = require('child_process');
+				const args = ['test', '-timeout', '30s', '-run', `^${functionName}/${parsedScenario}$`, packagePath, '-benchmem', '-benchtime', '1s', '-args', '-dotenv-dir', dotEnvPath];
+				const cwd = (vscode.workspace.workspaceFolders && vscode.workspace.workspaceFolders[0].uri.fsPath) || undefined;
+				const child = spawn('go', args, { cwd });
+
+				let collected = '';
+				child.stdout.on('data', (data: Buffer) => {
+					const text = data.toString();
+					collected += text;
+					try { run.appendOutput(text); } catch { }
+				});
+				child.stderr.on('data', (data: Buffer) => {
+					const text = data.toString();
+					collected += text;
+					try { run.appendOutput(text); } catch { }
+				});
+
+				const exitCode: number = await new Promise((resolve) => {
+					child.on('close', (code: number) => resolve(code ?? 1));
+				});
+
+				if (exitCode === 0) {
+					run.passed(test);
+				} else {
+					const message = new vscode.TestMessage('go test failed\n\n' + collected);
+					run.failed(test, message);
+				}
+			} catch (err: any) {
+				run.errored(test, new vscode.TestMessage((err && err.message) || String(err)));
+			}
+		}
+		run.end();
+	};
+
+	testController.createRunProfile('Run Scenario', vscode.TestRunProfileKind.Run, (request, token) => runHandler(request, token, false), true);
+	testController.createRunProfile('Debug Scenario', vscode.TestRunProfileKind.Debug, (request, token) => runHandler(request, token, true));
+
+	// Command to run a scenario (current file + line) through the Test Explorer flow
+	const RunScenarioInExplorer = vscode.commands.registerCommand('GoGherkinRunner.runScenarioInExplorer', async (lineNumberFromLens?: number) => {
+		const editor = vscode.window.activeTextEditor;
+		if (!editor) {
+			vscode.window.showInformationMessage('No active editor found.');
+			return;
+		}
+		const document = editor.document;
+		if (!validateDocument(document)) {
+			vscode.window.showInformationMessage('This is not a .feature (Gherkin) file.');
+			return;
+		}
+		const lineNumber = typeof lineNumberFromLens === 'number' ? lineNumberFromLens : editor.selection.active.line;
+		await discoverScenariosInDocument(document);
+		const fileId = document.uri.toString();
+		const fileItem = testController.items.get(fileId);
+		if (!fileItem) {
+			vscode.window.showInformationMessage('No test items found for this file.');
+			return;
+		}
+		const scenarioId = `${fileId}#${lineNumber}`;
+		const scenarioItem = fileItem.children.get(scenarioId);
+		if (!scenarioItem) {
+			vscode.window.showInformationMessage('No test item found for this scenario line.');
+			return;
+		}
+		const cts = new vscode.CancellationTokenSource();
+		await runHandler(new vscode.TestRunRequest([scenarioItem]), cts.token, false);
+	});
+	context.subscriptions.push(RunScenarioInExplorer);
+
+	// Keep tests in sync when feature files change
+	const watcher = vscode.workspace.createFileSystemWatcher('**/*.feature');
+	context.subscriptions.push(watcher);
+	watcher.onDidCreate(async (uri) => {
+		const doc = await vscode.workspace.openTextDocument(uri);
+		await discoverScenariosInDocument(doc);
+	});
+	watcher.onDidChange(async (uri) => {
+		const doc = await vscode.workspace.openTextDocument(uri);
+		await discoverScenariosInDocument(doc);
+	});
+	watcher.onDidDelete((uri) => {
+		const id = uri.toString();
+		testController.items.delete(id);
+	});
+
+	// Also populate when user opens a .feature file
+	context.subscriptions.push(vscode.workspace.onDidOpenTextDocument(async (doc) => {
+		if (validateDocument(doc)) {
+			await discoverScenariosInDocument(doc);
+		}
+	}));
+
+	// Optional: command to discover all scenarios on demand
+	const DiscoverAllFeatures = vscode.commands.registerCommand('GoGherkinRunner.discoverAllFeatures', async () => {
+		const featureFiles = await vscode.workspace.findFiles('**/*.feature');
+		await Promise.all(featureFiles.map(async (uri) => {
+			const doc = await vscode.workspace.openTextDocument(uri);
+			await discoverScenariosInDocument(doc);
+		}));
+	});
+	context.subscriptions.push(DiscoverAllFeatures);
 
 	// CodeLensProvider for Scenario lines
 	class ScenarioCodeLensProvider implements vscode.CodeLensProvider {
