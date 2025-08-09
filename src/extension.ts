@@ -11,7 +11,7 @@ export function activate(context: vscode.ExtensionContext) {
 	};
 
 	const validateScenario = (lineText: string) => {
-		if (!lineText.includes('Scenario:') || lineText.trim().startsWith('#')) {
+		if (!lineText.includes('Scenario:') && !lineText.includes('Scenario Outline:') || lineText.trim().startsWith('#')) {
 			return false;
 		}
 		return true;
@@ -21,21 +21,22 @@ export function activate(context: vscode.ExtensionContext) {
 		let result = lineText.trim();
 		if (result.startsWith('Scenario:')) {
 			result = result.slice('Scenario:'.length).trim();
-			return result.replace(/ /g, '_');
 		}
 
 		if (result.startsWith('Scenario Outline:')) {
 			result = result.slice('Scenario Outline:'.length).trim();
-			return result.replace(/ /g, '_');
 		}
 
-		return null;
+		// Replace spaces with underscores and remove/replace problematic characters
+		result = result.replace(/ /g, '_');
+
+		return result;
 	};
 
 	const findTestFunctionName = (testFilePath: string): string | null => {
 		const fs = require('fs');
 		const goFileContent = fs.readFileSync(testFilePath, 'utf8');
-		const testFuncRegex = /func\s+(Test\w+)\s*\(.*?\)\s*\{/;
+		const testFuncRegex = /func\s+(Test\w+)\s*\([^)]*\*testing\.T[^)]*\)/;
 
 		const match = testFuncRegex.exec(goFileContent);
 		if (match) {
@@ -249,8 +250,8 @@ export function activate(context: vscode.ExtensionContext) {
 	context.subscriptions.push(DebugSingleScenario);
 
 	// Create a test controller for GoGherkinRunner
-	const testController = vscode.tests.createTestController('GoGherkinRunnerTestController', 'GoGherkinRunner Tests');
-	context.subscriptions.push(testController);
+	// const testController = vscode.tests.createTestController('GoGherkinRunnerTestController', 'GoGherkinRunner Tests');
+	// context.subscriptions.push(testController);
 
 
 	// CodeLensProvider for Scenario lines
@@ -266,7 +267,7 @@ export function activate(context: vscode.ExtensionContext) {
 				if (line.text.trim().startsWith('#')) {
 					continue;
 				}
-				if (line.text.includes('Scenario:')) {
+				if (line.text.includes('Scenario:') || line.text.includes('Scenario Outline:')) {
 					const range = new vscode.Range(i, 0, i, line.text.length);
 					codeLenses.push(new vscode.CodeLens(range, {
 						title: `$(play)  Run test`,
