@@ -2,12 +2,13 @@
   "name": "gogherkinrunner",
   "displayName": "Go Gherkin Runner",
   "description": "Run single Gherkin scenarios in Go projects directly from VS Code without commenting!",
-  "version": "0.0.3",
+  "version": "0.0.4",
   "publisher": "AmirHosseinHanifehzadeh",
   "repository": {
     "type": "git",
     "url": "https://github.com/AmirhosseinHanifehzadeh/G2R.git"
   },
+  "changelog": "https://github.com/AmirhosseinHanifehzadeh/G2R/blob/main/CHANGELOG.md",
   "keywords": [
     "gherkin",
     "cucumber",

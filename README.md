@@ -19,6 +19,12 @@ GoGherkinRunner helps you run and debug individual Gherkin scenarios in Go proje
 
 ## Installation
 
+### From VS Code Marketplace (Recommended)
+1. Open VS Code
+2. Go to Extensions (`Ctrl+Shift+X`)
+3. Search for "Go Gherkin Runner"
+4. Click "Install"
+
 ### From VSIX
 1. Build the extension:
    ```sh
@@ -26,7 +32,7 @@ GoGherkinRunner helps you run and debug individual Gherkin scenarios in Go proje
    npm run compile
    vsce package
    ```
-   This creates a `.vsix` file (e.g., `GoGherkinRunner-0.0.1.vsix`).
+   This creates a `.vsix` file (e.g., `GoGherkinRunner-0.0.4.vsix`).
 2. In VS Code, open the Command Palette (`Ctrl+Shift+P`), select `Extensions: Install from VSIX...`, and choose your `.vsix` file.
 
 ### From Source (Development)
