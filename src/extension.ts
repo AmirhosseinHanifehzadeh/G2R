@@ -365,7 +365,7 @@ export function activate(context: vscode.ExtensionContext) {
 
 	const runHandler = async (request: vscode.TestRunRequest, token: vscode.CancellationToken, debug: boolean) => {
 		const run = testController.createTestRun(request);
-		await focusTestingViewIfAvailable();
+		// Removed focusTestingViewIfAvailable() to prevent automatic focus on Testing panel
 		const queue: vscode.TestItem[] = [];
 		if (request.include) {
 			request.include.forEach((test: vscode.TestItem) => queue.push(test));
