@@ -54,6 +54,10 @@
       {
         "command": "GoGherkinRunner.discoverAllFeatures",
         "title": "Discover All Gherkin Scenarios"
+      },
+      {
+        "command": "GoGherkinRunner.refreshTestDiscovery",
+        "title": "Refresh Test Discovery"
       }
     ]
   },

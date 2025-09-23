@@ -293,28 +293,57 @@ export function activate(context: vscode.ExtensionContext) {
 			return;
 		}
 		const fileItem = getOrCreateFileItem(document.uri);
+		
+		// Clear existing children to avoid stale test items
 		fileItem.children.replace([]);
+		
+		// Find all scenarios and create test items
+		const scenarios: { line: number, text: string, id: string }[] = [];
+		let scenarioIndex = 0;
 		for (let i = 0; i < document.lineCount; i++) {
 			const line = document.lineAt(i);
 			if (line.text.trim().startsWith('#')) {
 				continue;
 			}
 			if (line.text.includes('Scenario:') || line.text.includes('Scenario Outline:')) {
-				const id = `${document.uri.toString()}#${i}`;
-				const scenarioItem = testController.createTestItem(id, line.text.trim(), document.uri);
-				scenarioItem.range = new vscode.Range(i, 0, i, line.text.length);
-				fileItem.children.add(scenarioItem);
+				// Create a unique ID based on scenario content and index to avoid collisions
+				const scenarioText = line.text.trim();
+				const scenarioHash = scenarioText.replace(/[^a-zA-Z0-9]/g, '').substring(0, 15);
+				const id = `${document.uri.toString()}#${scenarioIndex}_${scenarioHash}`;
+				
+				scenarios.push({
+					line: i,
+					text: scenarioText,
+					id: id
+				});
+				scenarioIndex++;
 			}
 		}
+		
+		// Create test items with current line numbers
+		scenarios.forEach(scenario => {
+			try {
+				const scenarioItem = testController.createTestItem(scenario.id, scenario.text, document.uri);
+				scenarioItem.range = new vscode.Range(scenario.line, 0, scenario.line, document.lineAt(scenario.line).text.length);
+				fileItem.children.add(scenarioItem);
+			} catch (error) {
+				console.error(`Error creating test item for scenario at line ${scenario.line}:`, error);
+			}
+		});
 	};
 
 	testController.resolveHandler = async (item?: vscode.TestItem) => {
 		if (!item) {
-			// Lazy: only discover scenarios for currently visible .feature editors
-			const visibleDocs = vscode.window.visibleTextEditors
-				.map((e: vscode.TextEditor) => e.document)
-				.filter((doc: vscode.TextDocument) => validateDocument(doc));
-			await Promise.all(visibleDocs.map((doc: vscode.TextDocument) => discoverScenariosInDocument(doc)));
+			// Discover scenarios for all feature files in the workspace
+			const featureFiles = await vscode.workspace.findFiles('**/*.feature');
+			await Promise.all(featureFiles.map(async (uri: vscode.Uri) => {
+				try {
+					const doc = await vscode.workspace.openTextDocument(uri);
+					await discoverScenariosInDocument(doc);
+				} catch (error) {
+					console.error(`Error discovering scenarios in ${uri.fsPath}:`, error);
+				}
+			}));
 			return;
 		}
 		// If a file node is expanded, refresh its scenarios
@@ -457,8 +486,15 @@ export function activate(context: vscode.ExtensionContext) {
 			vscode.window.showInformationMessage('No test items found for this file.');
 			return;
 		}
-		const scenarioId = `${fileId}#${lineNumber}`;
-		const scenarioItem = fileItem.children.get(scenarioId);
+		
+		// Find the scenario item that matches the current line
+		let scenarioItem: vscode.TestItem | undefined;
+		fileItem.children.forEach((item) => {
+			if (item.range && item.range.start.line === lineNumber) {
+				scenarioItem = item;
+			}
+		});
+		
 		if (!scenarioItem) {
 			vscode.window.showInformationMessage('No test item found for this scenario line.');
 			return;
@@ -491,6 +527,16 @@ export function activate(context: vscode.ExtensionContext) {
 		}
 	}));
 
+	// Listen for text document changes to refresh test items
+	context.subscriptions.push(vscode.workspace.onDidChangeTextDocument(async (event: vscode.TextDocumentChangeEvent) => {
+		if (validateDocument(event.document)) {
+			// Debounce the refresh to avoid too many updates
+			setTimeout(async () => {
+				await discoverScenariosInDocument(event.document);
+			}, 300);
+		}
+	}));
+
 	// Optional: command to discover all scenarios on demand
 	const DiscoverAllFeatures = vscode.commands.registerCommand('GoGherkinRunner.discoverAllFeatures', async () => {
 		const featureFiles = await vscode.workspace.findFiles('**/*.feature');
@@ -498,8 +544,26 @@ export function activate(context: vscode.ExtensionContext) {
 			const doc = await vscode.workspace.openTextDocument(uri);
 			await discoverScenariosInDocument(doc);
 		}));
+		vscode.window.showInformationMessage(`Discovered scenarios in ${featureFiles.length} feature files`);
 	});
 	context.subscriptions.push(DiscoverAllFeatures);
+
+	// Command to refresh test discovery for current file
+	const RefreshTestDiscovery = vscode.commands.registerCommand('GoGherkinRunner.refreshTestDiscovery', async () => {
+		const editor = vscode.window.activeTextEditor;
+		if (!editor) {
+			vscode.window.showInformationMessage('No active editor found.');
+			return;
+		}
+		const document = editor.document;
+		if (!validateDocument(document)) {
+			vscode.window.showInformationMessage('This is not a .feature (Gherkin) file.');
+			return;
+		}
+		await discoverScenariosInDocument(document);
+		vscode.window.showInformationMessage('Test discovery refreshed for current file');
+	});
+	context.subscriptions.push(RefreshTestDiscovery);
 
 	// CodeLensProvider for Scenario lines
 	class ScenarioCodeLensProvider implements vscode.CodeLensProvider {
