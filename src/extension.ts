@@ -312,9 +312,9 @@ export function activate(context: vscode.ExtensionContext) {
 		if (!item) {
 			// Lazy: only discover scenarios for currently visible .feature editors
 			const visibleDocs = vscode.window.visibleTextEditors
-				.map(e => e.document)
-				.filter(doc => validateDocument(doc));
-			await Promise.all(visibleDocs.map(doc => discoverScenariosInDocument(doc)));
+				.map((e: vscode.TextEditor) => e.document)
+				.filter((doc: vscode.TextDocument) => validateDocument(doc));
+			await Promise.all(visibleDocs.map((doc: vscode.TextDocument) => discoverScenariosInDocument(doc)));
 			return;
 		}
 		// If a file node is expanded, refresh its scenarios
@@ -325,7 +325,7 @@ export function activate(context: vscode.ExtensionContext) {
 	};
 
 	const enqueueAll = (collection: vscode.TestItemCollection, queue: vscode.TestItem[]) => {
-		collection.forEach((child) => {
+		collection.forEach((child: vscode.TestItem) => {
 			if (child.children.size === 0) {
 				queue.push(child);
 			} else {
@@ -339,7 +339,7 @@ export function activate(context: vscode.ExtensionContext) {
 		await focusTestingViewIfAvailable();
 		const queue: vscode.TestItem[] = [];
 		if (request.include) {
-			request.include.forEach(test => queue.push(test));
+			request.include.forEach((test: vscode.TestItem) => queue.push(test));
 		} else {
 			enqueueAll(testController.items, queue);
 		}
@@ -406,12 +406,12 @@ export function activate(context: vscode.ExtensionContext) {
 				const child = spawn('go', args, { cwd });
 
 				let collected = '';
-				child.stdout.on('data', (data: Buffer) => {
+				child.stdout.on('data', (data: any) => {
 					const text = data.toString();
 					collected += text;
 					try { run.appendOutput(text); } catch { }
 				});
-				child.stderr.on('data', (data: Buffer) => {
+				child.stderr.on('data', (data: any) => {
 					const text = data.toString();
 					collected += text;
 					try { run.appendOutput(text); } catch { }
@@ -471,21 +471,21 @@ export function activate(context: vscode.ExtensionContext) {
 	// Keep tests in sync when feature files change
 	const watcher = vscode.workspace.createFileSystemWatcher('**/*.feature');
 	context.subscriptions.push(watcher);
-	watcher.onDidCreate(async (uri) => {
+	watcher.onDidCreate(async (uri: vscode.Uri) => {
 		const doc = await vscode.workspace.openTextDocument(uri);
 		await discoverScenariosInDocument(doc);
 	});
-	watcher.onDidChange(async (uri) => {
+	watcher.onDidChange(async (uri: vscode.Uri) => {
 		const doc = await vscode.workspace.openTextDocument(uri);
 		await discoverScenariosInDocument(doc);
 	});
-	watcher.onDidDelete((uri) => {
+	watcher.onDidDelete((uri: vscode.Uri) => {
 		const id = uri.toString();
 		testController.items.delete(id);
 	});
 
 	// Also populate when user opens a .feature file
-	context.subscriptions.push(vscode.workspace.onDidOpenTextDocument(async (doc) => {
+	context.subscriptions.push(vscode.workspace.onDidOpenTextDocument(async (doc: vscode.TextDocument) => {
 		if (validateDocument(doc)) {
 			await discoverScenariosInDocument(doc);
 		}
@@ -494,7 +494,7 @@ export function activate(context: vscode.ExtensionContext) {
 	// Optional: command to discover all scenarios on demand
 	const DiscoverAllFeatures = vscode.commands.registerCommand('GoGherkinRunner.discoverAllFeatures', async () => {
 		const featureFiles = await vscode.workspace.findFiles('**/*.feature');
-		await Promise.all(featureFiles.map(async (uri) => {
+		await Promise.all(featureFiles.map(async (uri: vscode.Uri) => {
 			const doc = await vscode.workspace.openTextDocument(uri);
 			await discoverScenariosInDocument(doc);
 		}));
@@ -506,7 +506,6 @@ export function activate(context: vscode.ExtensionContext) {
 		onDidChangeCodeLenses?: vscode.Event<void> | undefined;
 
 		provideCodeLenses(document: vscode.TextDocument, token: vscode.CancellationToken): vscode.CodeLens[] {
-			console.log('CodeLens provider called for', document.fileName, document.languageId);
 			const codeLenses: vscode.CodeLens[] = [];
 			let scenarioCount = 1;
 			for (let i = 0; i < document.lineCount; i++) {
@@ -541,6 +540,104 @@ export function activate(context: vscode.ExtensionContext) {
 				{ language: 'gherkin', scheme: 'file' }
 			],
 			new ScenarioCodeLensProvider()
+		)
+	);
+
+	// DocumentSymbolProvider for Gherkin scenarios (Ctrl+Shift+O)
+	class GherkinDocumentSymbolProvider implements vscode.DocumentSymbolProvider {
+		provideDocumentSymbols(document: vscode.TextDocument, token: vscode.CancellationToken): vscode.ProviderResult<vscode.SymbolInformation[] | vscode.DocumentSymbol[]> {
+			if (!validateDocument(document)) {
+				return [];
+			}
+
+			const symbols: vscode.DocumentSymbol[] = [];
+			let scenarioCount = 1;
+			let backgroundSteps: { text: string, line: number }[] = [];
+			let inBackground = false;
+
+			for (let i = 0; i < document.lineCount; i++) {
+				const line = document.lineAt(i);
+				const lineText = line.text.trim();
+
+				// Skip comments
+				if (lineText.startsWith('#')) {
+					continue;
+				}
+
+				// Check for Background section
+				if (lineText.startsWith('Background:')) {
+					inBackground = true;
+					backgroundSteps = [];
+					continue;
+				}
+
+				// If we're in a background section, collect the steps
+				if (inBackground) {
+					// Check if we hit a new section (Feature, Scenario, etc.)
+					if (lineText.startsWith('Feature:') || lineText.startsWith('Scenario:') || lineText.startsWith('Scenario Outline:')) {
+						// End of background section
+						inBackground = false;
+					} else if (lineText.startsWith('Given') || lineText.startsWith('When') || lineText.startsWith('Then') || lineText.startsWith('And') || lineText.startsWith('But')) {
+						// This is a step in the background
+						backgroundSteps.push({ text: lineText, line: i });
+					}
+				}
+
+				// Check for Scenario or Scenario Outline
+				if (lineText.includes('Scenario:') || lineText.includes('Scenario Outline:')) {
+					// Extract scenario description
+					let scenarioDescription = lineText;
+					if (scenarioDescription.startsWith('Scenario:')) {
+						scenarioDescription = scenarioDescription.slice('Scenario:'.length).trim();
+					} else if (scenarioDescription.startsWith('Scenario Outline:')) {
+						scenarioDescription = scenarioDescription.slice('Scenario Outline:'.length).trim();
+					}
+
+					// Create symbol name with scenario number and description
+					const symbolName = `Scenario ${scenarioCount}: ${scenarioDescription}`;
+
+					// Create document symbol
+					const symbol = new vscode.DocumentSymbol(
+						symbolName,
+						lineText,
+						vscode.SymbolKind.Method, // Using Method symbol kind for scenarios
+						line.range,
+						line.range
+					);
+
+					symbols.push(symbol);
+					scenarioCount++;
+				}
+			}
+
+			// Add background steps as symbols if they exist
+			if (backgroundSteps.length > 0) {
+				backgroundSteps.forEach((stepInfo) => {
+					const symbolName = `Background >> ${stepInfo.text}`;
+					const line = document.lineAt(stepInfo.line);
+					const symbol = new vscode.DocumentSymbol(
+						symbolName,
+						stepInfo.text,
+						vscode.SymbolKind.Field, // Using Field symbol kind for background steps
+						line.range,
+						line.range
+					);
+					symbols.unshift(symbol); // Add at the beginning
+				});
+			}
+
+			return symbols;
+		}
+	}
+
+	// Register the DocumentSymbolProvider for .feature files
+	context.subscriptions.push(
+		vscode.languages.registerDocumentSymbolProvider(
+			[
+				{ language: 'feature', scheme: 'file' },
+				{ language: 'gherkin', scheme: 'file' }
+			],
+			new GherkinDocumentSymbolProvider()
 		)
 	);
 }
