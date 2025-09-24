@@ -323,7 +323,13 @@ export function activate(context: vscode.ExtensionContext) {
 		const fileItem = getOrCreateFileItem(document.uri);
 		
 		// Clear existing children to avoid stale test items
+		
+		// Clear existing children to avoid stale test items
 		fileItem.children.replace([]);
+		
+		// Find all scenarios and create test items
+		const scenarios: { line: number, text: string, id: string }[] = [];
+		let scenarioIndex = 0;
 		
 		// Find all scenarios and create test items
 		const scenarios: { line: number, text: string, id: string }[] = [];
@@ -353,10 +359,30 @@ export function activate(context: vscode.ExtensionContext) {
 			try {
 				const scenarioItem = testController.createTestItem(scenario.id, scenario.text, document.uri);
 				scenarioItem.range = new vscode.Range(scenario.line, 0, scenario.line, document.lineAt(scenario.line).text.length);
+				// Create a unique ID based on scenario content and index to avoid collisions
+				const scenarioText = line.text.trim();
+				const scenarioHash = scenarioText.replace(/[^a-zA-Z0-9]/g, '').substring(0, 15);
+				const id = `${document.uri.toString()}#${scenarioIndex}_${scenarioHash}`;
+				
+				scenarios.push({
+					line: i,
+					text: scenarioText,
+					id: id
+				});
+				scenarioIndex++;
+			}
+		}
+		
+		// Create test items with current line numbers
+		scenarios.forEach(scenario => {
+			try {
+				const scenarioItem = testController.createTestItem(scenario.id, scenario.text, document.uri);
+				scenarioItem.range = new vscode.Range(scenario.line, 0, scenario.line, document.lineAt(scenario.line).text.length);
 				fileItem.children.add(scenarioItem);
 			} catch (error) {
 				console.error(`Error creating test item for scenario at line ${scenario.line}:`, error);
 			}
+		});
 		});
 	};
 
@@ -576,76 +602,77 @@ export function activate(context: vscode.ExtensionContext) {
 	});
 	context.subscriptions.push(DiscoverAllFeatures);
 
-	// Command to refresh test discovery for current file
-	const RefreshTestDiscovery = vscode.commands.registerCommand('GoGherkinRunner.refreshTestDiscovery', async () => {
-		const editor = vscode.window.activeTextEditor;
-		if (!editor) {
-			vscode.window.showInformationMessage('No active editor found.');
-			return;
-		}
-		const document = editor.document;
-		if (!validateDocument(document)) {
-			vscode.window.showInformationMessage('This is not a .feature (Gherkin) file.');
-			return;
-		}
-		await discoverScenariosInDocument(document);
-		vscode.window.showInformationMessage('Test discovery refreshed for current file');
-	});
-	context.subscriptions.push(RefreshTestDiscovery);
 
-	// Command to run all scenarios in a feature file
-	const RunAllScenarios = vscode.commands.registerCommand('GoGherkinRunner.runAllScenarios', async () => {
-		const editor = vscode.window.activeTextEditor;
-		if (!editor) {
-			vscode.window.showInformationMessage('No active editor found.');
-			return;
-		}
-		const document = editor.document;
-		if (!validateDocument(document)) {
-			vscode.window.showInformationMessage('This is not a .feature (Gherkin) file.');
-			return;
-		}
-
-		// Find all scenarios in the document
-		const scenarios: vscode.TestItem[] = [];
-		await discoverScenariosInDocument(document);
-		const fileId = document.uri.toString();
-		const fileItem = testController.items.get(fileId);
-		if (!fileItem) {
-			vscode.window.showInformationMessage('No test items found for this file.');
-			return;
-		}
-
-		// Collect all scenario items
-		fileItem.children.forEach((scenarioItem) => {
-			scenarios.push(scenarioItem);
+		// Command to refresh test discovery for current file
+		const RefreshTestDiscovery = vscode.commands.registerCommand('GoGherkinRunner.refreshTestDiscovery', async () => {
+			const editor = vscode.window.activeTextEditor;
+			if (!editor) {
+				vscode.window.showInformationMessage('No active editor found.');
+				return;
+			}
+			const document = editor.document;
+			if (!validateDocument(document)) {
+				vscode.window.showInformationMessage('This is not a .feature (Gherkin) file.');
+				return;
+			}
+			await discoverScenariosInDocument(document);
+			vscode.window.showInformationMessage('Test discovery refreshed for current file');
 		});
-
-		if (scenarios.length === 0) {
-			vscode.window.showInformationMessage('No scenarios found in this file.');
-			return;
-		}
-
-		// Run all scenarios
-		const cts = new vscode.CancellationTokenSource();
-		await runHandler(new vscode.TestRunRequest(scenarios), cts.token, false);
-		
-		// Focus on Test Results tab in bottom panel
-		await focusTestResultsPanelIfAvailable();
-	});
-	context.subscriptions.push(RunAllScenarios);
-
-	// Command to explicitly show/focus the Test Results panel
-	const ShowTestResults = vscode.commands.registerCommand('GoGherkinRunner.showTestResults', async () => {
-		await focusTestResultsPanelIfAvailable();
-	});
-	context.subscriptions.push(ShowTestResults);
-
-	// Command to refresh CodeLenses
-	const RefreshCodeLenses = vscode.commands.registerCommand('GoGherkinRunner.refreshCodeLenses', () => {
-		vscode.window.showInformationMessage('CodeLenses refreshed - please reload the file');
-	});
-	context.subscriptions.push(RefreshCodeLenses);
+		context.subscriptions.push(RefreshTestDiscovery);
+	
+		// Command to run all scenarios in a feature file
+		const RunAllScenarios = vscode.commands.registerCommand('GoGherkinRunner.runAllScenarios', async () => {
+			const editor = vscode.window.activeTextEditor;
+			if (!editor) {
+				vscode.window.showInformationMessage('No active editor found.');
+				return;
+			}
+			const document = editor.document;
+			if (!validateDocument(document)) {
+				vscode.window.showInformationMessage('This is not a .feature (Gherkin) file.');
+				return;
+			}
+	
+			// Find all scenarios in the document
+			const scenarios: vscode.TestItem[] = [];
+			await discoverScenariosInDocument(document);
+			const fileId = document.uri.toString();
+			const fileItem = testController.items.get(fileId);
+			if (!fileItem) {
+				vscode.window.showInformationMessage('No test items found for this file.');
+				return;
+			}
+	
+			// Collect all scenario items
+			fileItem.children.forEach((scenarioItem) => {
+				scenarios.push(scenarioItem);
+			});
+	
+			if (scenarios.length === 0) {
+				vscode.window.showInformationMessage('No scenarios found in this file.');
+				return;
+			}
+	
+			// Run all scenarios
+			const cts = new vscode.CancellationTokenSource();
+			await runHandler(new vscode.TestRunRequest(scenarios), cts.token, false);
+			
+			// Focus on Test Results tab in bottom panel
+			await focusTestResultsPanelIfAvailable();
+		});
+		context.subscriptions.push(RunAllScenarios);
+	
+		// Command to explicitly show/focus the Test Results panel
+		const ShowTestResults = vscode.commands.registerCommand('GoGherkinRunner.showTestResults', async () => {
+			await focusTestResultsPanelIfAvailable();
+		});
+		context.subscriptions.push(ShowTestResults);
+	
+		// Command to refresh CodeLenses
+		const RefreshCodeLenses = vscode.commands.registerCommand('GoGherkinRunner.refreshCodeLenses', () => {
+			vscode.window.showInformationMessage('CodeLenses refreshed - please reload the file');
+		});
+		context.subscriptions.push(RefreshCodeLenses);
 
 	// CodeLensProvider for Scenario lines
 	class ScenarioCodeLensProvider implements vscode.CodeLensProvider {
@@ -712,6 +739,104 @@ export function activate(context: vscode.ExtensionContext) {
 				{ language: 'gherkin', scheme: 'file' }
 			],
 			new ScenarioCodeLensProvider()
+		)
+	);
+
+	// DocumentSymbolProvider for Gherkin scenarios (Ctrl+Shift+O)
+	class GherkinDocumentSymbolProvider implements vscode.DocumentSymbolProvider {
+		provideDocumentSymbols(document: vscode.TextDocument, token: vscode.CancellationToken): vscode.ProviderResult<vscode.SymbolInformation[] | vscode.DocumentSymbol[]> {
+			if (!validateDocument(document)) {
+				return [];
+			}
+
+			const symbols: vscode.DocumentSymbol[] = [];
+			let scenarioCount = 1;
+			let backgroundSteps: { text: string, line: number }[] = [];
+			let inBackground = false;
+
+			for (let i = 0; i < document.lineCount; i++) {
+				const line = document.lineAt(i);
+				const lineText = line.text.trim();
+
+				// Skip comments
+				if (lineText.startsWith('#')) {
+					continue;
+				}
+
+				// Check for Background section
+				if (lineText.startsWith('Background:')) {
+					inBackground = true;
+					backgroundSteps = [];
+					continue;
+				}
+
+				// If we're in a background section, collect the steps
+				if (inBackground) {
+					// Check if we hit a new section (Feature, Scenario, etc.)
+					if (lineText.startsWith('Feature:') || lineText.startsWith('Scenario:') || lineText.startsWith('Scenario Outline:')) {
+						// End of background section
+						inBackground = false;
+					} else if (lineText.startsWith('Given') || lineText.startsWith('When') || lineText.startsWith('Then') || lineText.startsWith('And') || lineText.startsWith('But')) {
+						// This is a step in the background
+						backgroundSteps.push({ text: lineText, line: i });
+					}
+				}
+
+				// Check for Scenario or Scenario Outline
+				if (lineText.includes('Scenario:') || lineText.includes('Scenario Outline:')) {
+					// Extract scenario description
+					let scenarioDescription = lineText;
+					if (scenarioDescription.startsWith('Scenario:')) {
+						scenarioDescription = scenarioDescription.slice('Scenario:'.length).trim();
+					} else if (scenarioDescription.startsWith('Scenario Outline:')) {
+						scenarioDescription = scenarioDescription.slice('Scenario Outline:'.length).trim();
+					}
+
+					// Create symbol name with scenario number and description
+					const symbolName = `Scenario ${scenarioCount}: ${scenarioDescription}`;
+
+					// Create document symbol
+					const symbol = new vscode.DocumentSymbol(
+						symbolName,
+						lineText,
+						vscode.SymbolKind.Method, // Using Method symbol kind for scenarios
+						line.range,
+						line.range
+					);
+
+					symbols.push(symbol);
+					scenarioCount++;
+				}
+			}
+
+			// Add background steps as symbols if they exist
+			if (backgroundSteps.length > 0) {
+				backgroundSteps.forEach((stepInfo) => {
+					const symbolName = `Background >> ${stepInfo.text}`;
+					const line = document.lineAt(stepInfo.line);
+					const symbol = new vscode.DocumentSymbol(
+						symbolName,
+						stepInfo.text,
+						vscode.SymbolKind.Field, // Using Field symbol kind for background steps
+						line.range,
+						line.range
+					);
+					symbols.unshift(symbol); // Add at the beginning
+				});
+			}
+
+			return symbols;
+		}
+	}
+
+	// Register the DocumentSymbolProvider for .feature files
+	context.subscriptions.push(
+		vscode.languages.registerDocumentSymbolProvider(
+			[
+				{ language: 'feature', scheme: 'file' },
+				{ language: 'gherkin', scheme: 'file' }
+			],
+			new GherkinDocumentSymbolProvider()
 		)
 	);
 
