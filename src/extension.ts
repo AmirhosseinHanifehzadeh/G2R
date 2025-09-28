@@ -17,7 +17,7 @@ export function activate(context: vscode.ExtensionContext) {
 		return true;
 	};
 
-	const parseScenario = (lineText: string) => {
+	const parseScenario = (lineText: string, document: vscode.TextDocument, currentLineNumber: number) => {
 		let result = lineText.trim();
 		if (result.startsWith('Scenario:')) {
 			result = result.slice('Scenario:'.length).trim();
@@ -31,6 +31,48 @@ export function activate(context: vscode.ExtensionContext) {
 		result = result.replace(/ /g, '_');
 		// Add backslash before every ( or ) or '
 		result = result.replace(/[\(\)']/g, match => '\\' + match);
+
+		// Check for duplicate scenario names and add occurrence number
+		const scenarioOccurrences: { [key: string]: number } = {};
+		let currentOccurrence = 0;
+
+		// Count occurrences of this scenario name in the document
+		for (let i = 0; i < document.lineCount; i++) {
+			const line = document.lineAt(i);
+			const lineText = line.text.trim();
+			
+			if (lineText.startsWith('#')) {
+				continue;
+			}
+
+			if (lineText.includes('Scenario:') || lineText.includes('Scenario Outline:')) {
+				let scenarioName = lineText;
+				if (scenarioName.startsWith('Scenario:')) {
+					scenarioName = scenarioName.slice('Scenario:'.length).trim();
+				} else if (scenarioName.startsWith('Scenario Outline:')) {
+					scenarioName = scenarioName.slice('Scenario Outline:'.length).trim();
+				}
+
+				// Normalize the scenario name for comparison (same as parseScenario logic)
+				let normalizedName = scenarioName.replace(/ /g, '_').replace(/[\(\)']/g, match => '\\' + match);
+				
+				if (normalizedName === result) {
+					scenarioOccurrences[normalizedName] = (scenarioOccurrences[normalizedName] || 0) + 1;
+					if (i === currentLineNumber) {
+						currentOccurrence = scenarioOccurrences[normalizedName];
+					}
+				}
+			}
+		}
+
+		// If this scenario appears more than once, add the occurrence number
+		if (scenarioOccurrences[result] > 1) {
+			const occurrenceNumber = (currentOccurrence - 1).toString().padStart(2, '0');
+			// Only add suffix if the occurrence number is not 00
+			if (occurrenceNumber !== '00') {
+				result = `${result}#${occurrenceNumber}`;
+			}
+		}
 
 		return result;
 	};
@@ -114,6 +156,7 @@ export function activate(context: vscode.ExtensionContext) {
 	};
 
 	const RunSingleScenario = vscode.commands.registerCommand('GoGherkinRunner.runSingleScenario', (lineNumberFromLens?: number) => {
+		console.log('RunSingleScenario command called with lineNumberFromLens:', lineNumberFromLens);
 		const editor = vscode.window.activeTextEditor;
 		if (!editor) {
 			vscode.window.showInformationMessage('No active editor found.');
@@ -127,12 +170,13 @@ export function activate(context: vscode.ExtensionContext) {
 
 		const lineNumber = typeof lineNumberFromLens === 'number' ? lineNumberFromLens : editor.selection.active.line;
 		const lineText = document.lineAt(lineNumber).text;
+		console.log('Line number:', lineNumber, 'Line text:', lineText);
 		if (!validateScenario(lineText)) {
 			vscode.window.showInformationMessage('This is not a Scenario line.');
 			return;
 		}
 
-		const parsedScenario = parseScenario(lineText);
+		const parsedScenario = parseScenario(lineText, document, lineNumber);
 		if (!parsedScenario) {
 			vscode.window.showInformationMessage('This is not a Scenario line.');
 			return;
@@ -198,7 +242,7 @@ export function activate(context: vscode.ExtensionContext) {
 			return;
 		}
 
-		const parsedScenario = parseScenario(lineText);
+		const parsedScenario = parseScenario(lineText, document, lineNumber);
 		if (!parsedScenario) {
 			vscode.window.showInformationMessage('This is not a Scenario line.');
 			return;
@@ -323,13 +367,7 @@ export function activate(context: vscode.ExtensionContext) {
 		const fileItem = getOrCreateFileItem(document.uri);
 		
 		// Clear existing children to avoid stale test items
-		
-		// Clear existing children to avoid stale test items
 		fileItem.children.replace([]);
-		
-		// Find all scenarios and create test items
-		const scenarios: { line: number, text: string, id: string }[] = [];
-		let scenarioIndex = 0;
 		
 		// Find all scenarios and create test items
 		const scenarios: { line: number, text: string, id: string }[] = [];
@@ -359,30 +397,10 @@ export function activate(context: vscode.ExtensionContext) {
 			try {
 				const scenarioItem = testController.createTestItem(scenario.id, scenario.text, document.uri);
 				scenarioItem.range = new vscode.Range(scenario.line, 0, scenario.line, document.lineAt(scenario.line).text.length);
-				// Create a unique ID based on scenario content and index to avoid collisions
-				const scenarioText = line.text.trim();
-				const scenarioHash = scenarioText.replace(/[^a-zA-Z0-9]/g, '').substring(0, 15);
-				const id = `${document.uri.toString()}#${scenarioIndex}_${scenarioHash}`;
-				
-				scenarios.push({
-					line: i,
-					text: scenarioText,
-					id: id
-				});
-				scenarioIndex++;
-			}
-		}
-		
-		// Create test items with current line numbers
-		scenarios.forEach(scenario => {
-			try {
-				const scenarioItem = testController.createTestItem(scenario.id, scenario.text, document.uri);
-				scenarioItem.range = new vscode.Range(scenario.line, 0, scenario.line, document.lineAt(scenario.line).text.length);
 				fileItem.children.add(scenarioItem);
 			} catch (error) {
 				console.error(`Error creating test item for scenario at line ${scenario.line}:`, error);
 			}
-		});
 		});
 	};
 
@@ -458,7 +476,7 @@ export function activate(context: vscode.ExtensionContext) {
 					run.skipped(test);
 					continue;
 				}
-				const parsedScenario = parseScenario(lineText);
+				const parsedScenario = parseScenario(lineText, doc, lineNumber);
 				const { foundGoFilePath } = findGoTestFile(doc);
 				if (!foundGoFilePath) {
 					run.errored(test, new vscode.TestMessage('No .go file containing the feature file path was found.'));
@@ -714,6 +732,7 @@ export function activate(context: vscode.ExtensionContext) {
 				
 				if (line.text.includes('Scenario:') || line.text.includes('Scenario Outline:')) {
 					const range = new vscode.Range(i, 0, i, line.text.length);
+					console.log('Adding CodeLens for scenario at line:', i, 'text:', lineText);
 					codeLenses.push(new vscode.CodeLens(range, {
 						title: `$(play)  Run test`,
 						command: 'GoGherkinRunner.runSingleScenario',
@@ -727,6 +746,7 @@ export function activate(context: vscode.ExtensionContext) {
 					scenarioCount++;
 				}
 			}
+			console.log('Total CodeLenses created:', codeLenses.length);
 			return codeLenses;
 		}
 	}
@@ -739,104 +759,6 @@ export function activate(context: vscode.ExtensionContext) {
 				{ language: 'gherkin', scheme: 'file' }
 			],
 			new ScenarioCodeLensProvider()
-		)
-	);
-
-	// DocumentSymbolProvider for Gherkin scenarios (Ctrl+Shift+O)
-	class GherkinDocumentSymbolProvider implements vscode.DocumentSymbolProvider {
-		provideDocumentSymbols(document: vscode.TextDocument, token: vscode.CancellationToken): vscode.ProviderResult<vscode.SymbolInformation[] | vscode.DocumentSymbol[]> {
-			if (!validateDocument(document)) {
-				return [];
-			}
-
-			const symbols: vscode.DocumentSymbol[] = [];
-			let scenarioCount = 1;
-			let backgroundSteps: { text: string, line: number }[] = [];
-			let inBackground = false;
-
-			for (let i = 0; i < document.lineCount; i++) {
-				const line = document.lineAt(i);
-				const lineText = line.text.trim();
-
-				// Skip comments
-				if (lineText.startsWith('#')) {
-					continue;
-				}
-
-				// Check for Background section
-				if (lineText.startsWith('Background:')) {
-					inBackground = true;
-					backgroundSteps = [];
-					continue;
-				}
-
-				// If we're in a background section, collect the steps
-				if (inBackground) {
-					// Check if we hit a new section (Feature, Scenario, etc.)
-					if (lineText.startsWith('Feature:') || lineText.startsWith('Scenario:') || lineText.startsWith('Scenario Outline:')) {
-						// End of background section
-						inBackground = false;
-					} else if (lineText.startsWith('Given') || lineText.startsWith('When') || lineText.startsWith('Then') || lineText.startsWith('And') || lineText.startsWith('But')) {
-						// This is a step in the background
-						backgroundSteps.push({ text: lineText, line: i });
-					}
-				}
-
-				// Check for Scenario or Scenario Outline
-				if (lineText.includes('Scenario:') || lineText.includes('Scenario Outline:')) {
-					// Extract scenario description
-					let scenarioDescription = lineText;
-					if (scenarioDescription.startsWith('Scenario:')) {
-						scenarioDescription = scenarioDescription.slice('Scenario:'.length).trim();
-					} else if (scenarioDescription.startsWith('Scenario Outline:')) {
-						scenarioDescription = scenarioDescription.slice('Scenario Outline:'.length).trim();
-					}
-
-					// Create symbol name with scenario number and description
-					const symbolName = `Scenario ${scenarioCount}: ${scenarioDescription}`;
-
-					// Create document symbol
-					const symbol = new vscode.DocumentSymbol(
-						symbolName,
-						lineText,
-						vscode.SymbolKind.Method, // Using Method symbol kind for scenarios
-						line.range,
-						line.range
-					);
-
-					symbols.push(symbol);
-					scenarioCount++;
-				}
-			}
-
-			// Add background steps as symbols if they exist
-			if (backgroundSteps.length > 0) {
-				backgroundSteps.forEach((stepInfo) => {
-					const symbolName = `Background >> ${stepInfo.text}`;
-					const line = document.lineAt(stepInfo.line);
-					const symbol = new vscode.DocumentSymbol(
-						symbolName,
-						stepInfo.text,
-						vscode.SymbolKind.Field, // Using Field symbol kind for background steps
-						line.range,
-						line.range
-					);
-					symbols.unshift(symbol); // Add at the beginning
-				});
-			}
-
-			return symbols;
-		}
-	}
-
-	// Register the DocumentSymbolProvider for .feature files
-	context.subscriptions.push(
-		vscode.languages.registerDocumentSymbolProvider(
-			[
-				{ language: 'feature', scheme: 'file' },
-				{ language: 'gherkin', scheme: 'file' }
-			],
-			new GherkinDocumentSymbolProvider()
 		)
 	);
 
