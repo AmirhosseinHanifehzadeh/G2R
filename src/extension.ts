@@ -10,6 +10,14 @@ export function activate(context: vscode.ExtensionContext) {
 		return true;
 	};
 
+	// Settings accessors
+	const getSettings = () => {
+		const cfg = vscode.workspace.getConfiguration('GoGherkinRunner');
+		const projectRootName = cfg.get<string>('projectRootName', 'general-market');
+		const moduleRoot = cfg.get<string>('moduleRoot', 'hs.ir');
+		return { projectRootName, moduleRoot };
+	};
+
 	const validateScenario = (lineText: string) => {
 		if (!lineText.includes('Scenario:') && !lineText.includes('Scenario Outline:') || lineText.trim().startsWith('#')) {
 			return false;
@@ -105,12 +113,13 @@ export function activate(context: vscode.ExtensionContext) {
 	};
 
 	const findPackagePath = (searchPath: string): string | null => {
+		const { projectRootName, moduleRoot } = getSettings();
 		const searchPathList = searchPath.split(/[/\\]/);
 		const lastDir = searchPathList.pop();
-		const generalMarketIndex = searchPathList.indexOf('general-market');
-		if (generalMarketIndex !== -1) {
-			searchPathList.splice(0, generalMarketIndex + 1);
-			return "hs.ir/" + searchPathList.join('/');
+		const rootIdx = searchPathList.indexOf(projectRootName);
+		if (rootIdx !== -1) {
+			searchPathList.splice(0, rootIdx + 1);
+			return moduleRoot + "/" + searchPathList.join('/');
 		}
 		return null;
 	};
@@ -168,6 +177,11 @@ export function activate(context: vscode.ExtensionContext) {
 			return;
 		}
 
+		// Ensure latest content is saved before running
+		if (document.isDirty) {
+			document.save();
+		}
+
 		const lineNumber = typeof lineNumberFromLens === 'number' ? lineNumberFromLens : editor.selection.active.line;
 		const lineText = document.lineAt(lineNumber).text;
 		console.log('Line number:', lineNumber, 'Line text:', lineText);
@@ -185,7 +199,7 @@ export function activate(context: vscode.ExtensionContext) {
 		// Find Test File
 		const { foundGoFile, foundGoFilePath } = findGoTestFile(document);
 		if (!foundGoFile || !foundGoFilePath) {
-			vscode.window.showInformationMessage('No .go file containing the feature file path was found up to general-market directory.');
+			vscode.window.showInformationMessage('No .go file containing the feature file path was found in parent directories.');
 			return;
 		}
 
@@ -209,7 +223,7 @@ export function activate(context: vscode.ExtensionContext) {
 			return;
 		}
 
-		const command = `go test -timeout 30s -run ^${functionName}/${parsedScenario}$ ${packagePath} -benchmem -benchtime 1s -args -dotenv-dir ${dotEnvPath}`;
+		const command = `go test -count=1 -timeout 30s -run ^${functionName}/${parsedScenario}$ ${packagePath} -benchmem -benchtime 1s -args -dotenv-dir ${dotEnvPath}`;
 
 		// run command in terminal
 		let terminal = vscode.window.activeTerminal;
@@ -235,6 +249,11 @@ export function activate(context: vscode.ExtensionContext) {
 			return;
 		}
 
+		// Ensure latest content is saved before debugging
+		if (document.isDirty) {
+			await document.save();
+		}
+
 		const lineNumber = typeof lineNumberFromLens === 'number' ? lineNumberFromLens : editor.selection.active.line;
 		const lineText = document.lineAt(lineNumber).text;
 		if (!validateScenario(lineText)) {
@@ -251,7 +270,7 @@ export function activate(context: vscode.ExtensionContext) {
 		// Find Test File
 		const { foundGoFile, foundGoFilePath } = findGoTestFile(document);
 		if (!foundGoFile || !foundGoFilePath) {
-			vscode.window.showInformationMessage('No .go file containing the feature file path was found up to general-market directory.');
+			vscode.window.showInformationMessage('No .go file containing the feature file path was found in parent directories.');
 			return;
 		}
 
@@ -284,6 +303,7 @@ export function activate(context: vscode.ExtensionContext) {
 				mode: 'test',
 				program: packagePath,
 				args: [
+					'-test.count=1',
 					'-test.run',
 					`^${functionName}/${parsedScenario}$`,
 					'-dotenv-dir',
@@ -470,6 +490,10 @@ export function activate(context: vscode.ExtensionContext) {
 			// RUN: execute go test via child_process and capture output
 			try {
 				const doc = await vscode.workspace.openTextDocument(test.uri);
+				// Ensure latest content is saved before running from Test Explorer
+				if (doc.isDirty) {
+					await doc.save();
+				}
 				const lineNumber = test.range.start.line;
 				const lineText = doc.lineAt(lineNumber).text;
 				if (!validateScenario(lineText)) {
@@ -502,11 +526,23 @@ export function activate(context: vscode.ExtensionContext) {
 				run.started(test);
 
 				const { spawn } = require('child_process');
-				const args = ['test', '-timeout', '30s', '-run', `^${functionName}/${parsedScenario}$`, packagePath, '-benchmem', '-benchtime', '1s', '-args', '-dotenv-dir', dotEnvPath];
+				const args = ['test', '-count=1', '-timeout', '30s', '-run', `^${functionName}/${parsedScenario}$`, packagePath, '-benchmem', '-benchtime', '1s', '-args', '-dotenv-dir', dotEnvPath];
 				const cwd = (vscode.workspace.workspaceFolders && vscode.workspace.workspaceFolders[0].uri.fsPath) || undefined;
 				const child = spawn('go', args, { cwd });
 
 				let collected = '';
+				// Kill after 2 minutes as a last resort to avoid hanging runs
+				const hardTimeout = setTimeout(() => {
+					try { run.appendOutput('\n[GoGherkinRunner] Hard timeout reached, terminating process.\n'); } catch { }
+					try { child.kill('SIGKILL'); } catch { }
+				}, 120000);
+
+				// Cancel on user request
+				const cancelSub = token.onCancellationRequested(() => {
+					try { run.appendOutput('\n[GoGherkinRunner] Cancellation requested, terminating process.\n'); } catch { }
+					try { child.kill('SIGKILL'); } catch { }
+				});
+
 				child.stdout.on('data', (data: any) => {
 					const text = data.toString();
 					collected += text;
@@ -517,10 +553,18 @@ export function activate(context: vscode.ExtensionContext) {
 					collected += text;
 					try { run.appendOutput(text); } catch { }
 				});
+				child.on('error', (err: any) => {
+					const msg = (err && err.message) ? err.message : String(err);
+					collected += '\n[spawn error] ' + msg + '\n';
+					try { run.appendOutput('\n[spawn error] ' + msg + '\n'); } catch { }
+				});
 
 				const exitCode: number = await new Promise((resolve) => {
 					child.on('close', (code: number) => resolve(code ?? 1));
 				});
+
+				clearTimeout(hardTimeout);
+				cancelSub.dispose();
 
 				if (exitCode === 0) {
 					run.passed(test);
@@ -686,33 +730,86 @@ export function activate(context: vscode.ExtensionContext) {
 		});
 		context.subscriptions.push(ShowTestResults);
 	
-		// Command to refresh CodeLenses
-		const RefreshCodeLenses = vscode.commands.registerCommand('GoGherkinRunner.refreshCodeLenses', () => {
-			vscode.window.showInformationMessage('CodeLenses refreshed - please reload the file');
-		});
-		context.subscriptions.push(RefreshCodeLenses);
-
 	// CodeLensProvider for Scenario lines
 	class ScenarioCodeLensProvider implements vscode.CodeLensProvider {
 		private _onDidChangeCodeLenses = new vscode.EventEmitter<void>();
 		onDidChangeCodeLenses = this._onDidChangeCodeLenses.event;
+		private refreshTimeout: NodeJS.Timeout | undefined;
+		private lastDocumentVersion: number = -1;
+		private lastLineCount: number = -1;
+		
+		// Force a complete refresh of CodeLenses
+		public forceRefresh() {
+			if (this.refreshTimeout) {
+				clearTimeout(this.refreshTimeout);
+				this.refreshTimeout = undefined;
+			}
+			// Reset tracking variables to force complete refresh
+			this.lastDocumentVersion = -1;
+			this.lastLineCount = -1;
+			this._onDidChangeCodeLenses.fire();
+		}
 		
 		constructor() {
 			// Trigger a refresh of code lenses when text documents change
-			vscode.workspace.onDidChangeTextDocument(() => {
-				this._onDidChangeCodeLenses.fire();
+			vscode.workspace.onDidChangeTextDocument((event) => {
+				// Only refresh for .feature files
+				if (event.document.languageId === 'feature' || event.document.fileName.endsWith('.feature')) {
+					const currentLineCount = event.document.lineCount;
+					const currentVersion = event.document.version;
+					
+					// Check if line count changed (indicates line deletion/insertion)
+					const lineCountChanged = this.lastLineCount !== -1 && this.lastLineCount !== currentLineCount;
+					
+					// Clear any pending timeout
+					if (this.refreshTimeout) {
+						clearTimeout(this.refreshTimeout);
+						this.refreshTimeout = undefined;
+					}
+					
+					if (lineCountChanged) {
+						console.log(`Line count changed from ${this.lastLineCount} to ${currentLineCount}, forcing immediate refresh`);
+						// Force immediate refresh for line count changes
+						this.lastDocumentVersion = currentVersion;
+						this.lastLineCount = currentLineCount;
+						this._onDidChangeCodeLenses.fire();
+						
+						// Also force a delayed refresh to ensure VS Code catches up
+						setTimeout(() => {
+							this._onDidChangeCodeLenses.fire();
+						}, 100);
+					} else {
+						// For other changes, debounce
+						this.refreshTimeout = setTimeout(() => {
+							this.lastDocumentVersion = currentVersion;
+							this.lastLineCount = currentLineCount;
+							this._onDidChangeCodeLenses.fire();
+						}, 200);
+					}
+				}
 			});
 		}
 
 		provideCodeLenses(document: vscode.TextDocument, token: vscode.CancellationToken): vscode.CodeLens[] {
-			console.log('CodeLens provider called for:', document.fileName, 'language:', document.languageId);
+			console.log('CodeLens provider called for:', document.fileName, 'language:', document.languageId, 'timestamp:', Date.now());
 			const codeLenses: vscode.CodeLens[] = [];
 			let scenarioCount = 1;
+			
+			// Clear any existing timeout when providing new lenses
+			if (this.refreshTimeout) {
+				clearTimeout(this.refreshTimeout);
+				this.refreshTimeout = undefined;
+			}
+			
+			// Create a unique timestamp to ensure fresh CodeLens creation
+			const timestamp = Date.now();
+			
 			for (let i = 0; i < document.lineCount; i++) {
 				const line = document.lineAt(i);
 				const lineText = line.text.trim();
 				
-				if (lineText.startsWith('#')) {
+				// Skip empty lines and comments
+				if (lineText.startsWith('#') || lineText === '') {
 					continue;
 				}
 				
@@ -721,35 +818,73 @@ export function activate(context: vscode.ExtensionContext) {
 					const range = new vscode.Range(i, 0, i, line.text.length);
 					codeLenses.push(new vscode.CodeLens(range, {
 						title: `$(play)  Run all scenarios`,
-						command: 'GoGherkinRunner.runAllScenarios'
+						command: 'GoGherkinRunner.runAllScenarios',
+						tooltip: `Run all scenarios in this feature file (${timestamp})`
 					}));
 					codeLenses.push(new vscode.CodeLens(range, {
 						title: `$(preview)  Show test results`,
-						command: 'GoGherkinRunner.showTestResults'
+						command: 'GoGherkinRunner.showTestResults',
+						tooltip: `Show test results panel (${timestamp})`
 					}));
 					console.log('Added Feature button for line:', i, lineText);
 				}
 				
-				if (line.text.includes('Scenario:') || line.text.includes('Scenario Outline:')) {
+				// Check for Scenario or Scenario Outline (more precise detection)
+				if (lineText.startsWith('Scenario:') || lineText.startsWith('Scenario Outline:')) {
 					const range = new vscode.Range(i, 0, i, line.text.length);
+					const scenarioText = lineText.substring(lineText.indexOf(':') + 1).trim();
 					console.log('Adding CodeLens for scenario at line:', i, 'text:', lineText);
+					
+					// Create CodeLens with unique identifiers
 					codeLenses.push(new vscode.CodeLens(range, {
 						title: `$(play)  Run test`,
 						command: 'GoGherkinRunner.runSingleScenario',
-						arguments: [i]
+						arguments: [i],
+						tooltip: `Run scenario at line ${i + 1}: ${scenarioText} (${timestamp})`
 					}));
 					codeLenses.push(new vscode.CodeLens(range, {
 						title: `$(debug)  Debug (Scenario ${scenarioCount})`,
 						command: 'GoGherkinRunner.debugSingleScenario',
-						arguments: [i]
+						arguments: [i],
+						tooltip: `Debug scenario ${scenarioCount} at line ${i + 1}: ${scenarioText} (${timestamp})`
 					}));
 					scenarioCount++;
 				}
 			}
-			console.log('Total CodeLenses created:', codeLenses.length);
+			console.log('Total CodeLenses created:', codeLenses.length, 'timestamp:', timestamp);
 			return codeLenses;
 		}
+		
+		resolveCodeLens(codeLens: vscode.CodeLens, token: vscode.CancellationToken): vscode.CodeLens {
+			// Force resolution to ensure CodeLens is properly positioned
+			return codeLens;
+		}
 	}
+
+	// Create instance of CodeLens provider for global refresh access
+	const codeLensProvider = new ScenarioCodeLensProvider();
+	
+	// Command to refresh CodeLenses
+	const RefreshCodeLenses = vscode.commands.registerCommand('GoGherkinRunner.refreshCodeLenses', async () => {
+		// Force refresh our CodeLens provider multiple times to ensure it takes
+		codeLensProvider.forceRefresh();
+		
+		// Wait a bit and refresh again
+		setTimeout(() => {
+			codeLensProvider.forceRefresh();
+		}, 100);
+		
+		// Also force VS Code to refresh all CodeLens providers
+		await vscode.commands.executeCommand('vscode.executeCodeLensProvider', '*');
+		
+		// Final refresh after VS Code command
+		setTimeout(() => {
+			codeLensProvider.forceRefresh();
+		}, 200);
+		
+		vscode.window.showInformationMessage('CodeLenses force refreshed');
+	});
+	context.subscriptions.push(RefreshCodeLenses);
 
 	// Register the CodeLensProvider for .feature files
 	context.subscriptions.push(
@@ -758,8 +893,29 @@ export function activate(context: vscode.ExtensionContext) {
 				{ language: 'feature', scheme: 'file' },
 				{ language: 'gherkin', scheme: 'file' }
 			],
-			new ScenarioCodeLensProvider()
+			codeLensProvider
 		)
+	);
+	
+	// Additional refresh triggers for line positioning issues
+	context.subscriptions.push(
+		vscode.window.onDidChangeActiveTextEditor((editor) => {
+			// Refresh when switching between files
+			if (editor && (editor.document.languageId === 'feature' || editor.document.fileName.endsWith('.feature'))) {
+				setTimeout(() => {
+					codeLensProvider.forceRefresh();
+				}, 100);
+			}
+		})
+	);
+	
+	context.subscriptions.push(
+		vscode.workspace.onDidSaveTextDocument((document) => {
+			// Refresh when document is saved
+			if (document.languageId === 'feature' || document.fileName.endsWith('.feature')) {
+				codeLensProvider.forceRefresh();
+			}
+		})
 	);
 
 	// DocumentSymbolProvider for Gherkin scenarios (Ctrl+Shift+O)

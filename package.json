@@ -71,7 +71,30 @@
         "command": "GoGherkinRunner.refreshCodeLenses",
         "title": "Refresh CodeLenses"
       }
-    ]
+    ],
+    "keybindings": [
+      {
+        "command": "GoGherkinRunner.refreshCodeLenses",
+        "key": "ctrl+shift+r",
+        "mac": "cmd+shift+r",
+        "when": "editorTextFocus && resourceExtname == .feature"
+      }
+    ],
+    "configuration": {
+      "title": "Go Gherkin Runner",
+      "properties": {
+        "GoGherkinRunner.projectRootName": {
+          "type": "string",
+          "default": "general-market",
+          "description": "Top-level project directory name to anchor module path detection (e.g. 'general-market')."
+        },
+        "GoGherkinRunner.moduleRoot": {
+          "type": "string",
+          "default": "hs.ir",
+          "description": "Module root path prefix used to build the Go package path (e.g. 'hs.ir')."
+        }
+      }
+    }
   },
   "scripts": {
     "vscode:prepublish": "npm run package",
