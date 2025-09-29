@@ -2,7 +2,7 @@
   "name": "gogherkinrunner",
   "displayName": "Go Gherkin Runner",
   "description": "Run single Gherkin scenarios in Go projects directly from VS Code without commenting!",
-  "version": "0.0.4",
+  "version": "0.0.5",
   "publisher": "AmirHosseinHanifehzadeh",
   "repository": {
     "type": "git",
@@ -54,8 +54,47 @@
       {
         "command": "GoGherkinRunner.discoverAllFeatures",
         "title": "Discover All Gherkin Scenarios"
+      },
+      {
+        "command": "GoGherkinRunner.refreshTestDiscovery",
+        "title": "Refresh Test Discovery"
+      },
+      {
+        "command": "GoGherkinRunner.runAllScenarios",
+        "title": "Run All Scenarios"
+      },
+      {
+        "command": "GoGherkinRunner.showTestResults",
+        "title": "Show Test Results"
+      },
+      {
+        "command": "GoGherkinRunner.refreshCodeLenses",
+        "title": "Refresh CodeLenses"
       }
-    ]
+    ],
+    "keybindings": [
+      {
+        "command": "GoGherkinRunner.refreshCodeLenses",
+        "key": "ctrl+shift+r",
+        "mac": "cmd+shift+r",
+        "when": "editorTextFocus && resourceExtname == .feature"
+      }
+    ],
+    "configuration": {
+      "title": "Go Gherkin Runner",
+      "properties": {
+        "GoGherkinRunner.projectRootName": {
+          "type": "string",
+          "default": "general-market",
+          "description": "Top-level project directory name to anchor module path detection (e.g. 'general-market')."
+        },
+        "GoGherkinRunner.moduleRoot": {
+          "type": "string",
+          "default": "hs.ir",
+          "description": "Module root path prefix used to build the Go package path (e.g. 'hs.ir')."
+        }
+      }
+    }
   },
   "scripts": {
     "vscode:prepublish": "npm run package",
@@ -69,18 +108,18 @@
     "test": "vscode-test"
   },
   "devDependencies": {
-    "@types/vscode": "^1.60.0",
     "@types/mocha": "^10.0.10",
     "@types/node": "20.x",
+    "@types/vscode": "^1.60.0",
     "@typescript-eslint/eslint-plugin": "^8.31.1",
     "@typescript-eslint/parser": "^8.31.1",
-    "eslint": "^9.25.1",
-    "typescript": "^5.8.3",
-    "ts-loader": "^9.5.2",
-    "webpack": "^5.99.7",
-    "webpack-cli": "^6.0.1",
     "@vscode/test-cli": "^0.0.11",
-    "@vscode/test-electron": "^2.5.2"
+    "@vscode/test-electron": "^2.5.2",
+    "eslint": "^9.25.1",
+    "ts-loader": "^9.5.2",
+    "typescript": "^5.8.3",
+    "webpack": "^5.99.7",
+    "webpack-cli": "^6.0.1"
   },
   "packageManager": "yarn@4.9.1+sha512.f95ce356460e05be48d66401c1ae64ef84d163dd689964962c6888a9810865e39097a5e9de748876c2e0bf89b232d583c33982773e9903ae7a76257270986538"
 }
